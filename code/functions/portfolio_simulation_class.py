@@ -31,7 +31,10 @@ class PortfolioSimulation:
         self.no_transactions = 0
         # To keep track of skipped transactions
         self.skipped_transactions = []
-        
+        self.no_skipped_transactions = 0
+        # To keep track of buys and sells
+        self.no_buys = 0
+        self.no_sells = 0
 
     ##### Function to load input stock prices
     def load_stock_prices(self, stock_prices_df):
@@ -121,6 +124,8 @@ class PortfolioSimulation:
         # Only buy if capital is sufficient
         if price > self.cash:
             #print(f"Skipped BUY on {date}: Not enough capital.")
+            self.skipped_transactions.append((cik, date, "Not enough capital"))
+            self.no_skipped_transactions += 1
             return
         # New cash balance is simply old one, minus the price of the stock
         self.cash -= price
@@ -128,6 +133,8 @@ class PortfolioSimulation:
         self.positions[cik] = self.positions.get(cik, 0) + 1 #. get() returns 0 if cik is not in positions, otherwise returns the current value and then we add 1
         # Append the transaction to the list to later on check positions over time
         self.transactions.append(('buy', cik, price, date))
+        # Increment the number of transactions and buys
+        self.no_buys += 1
         self.no_transactions += 1
 
 
@@ -151,12 +158,17 @@ class PortfolioSimulation:
             None
         """        
         if self.positions.get(cik, 0) == 0: # 0 inside the brackets is simply the "default" to return, if cik is not in positions
+            # If no shares are held, the transaction is skipped
+            self.skipped_transactions.append((cik, date, "No shares held"))
+            self.no_skipped_transactions += 1
             return
         self.cash += price
         self.positions[cik] -= 1
         self.transactions.append(('sell', cik, price, date))
+        # Increment the number of transactions and sells
+        self.no_sells += 1
         self.no_transactions += 1
-        #print(f"Sold {cik} at {price} on {date}") # possible debugging
+        
         
 
 
@@ -327,7 +339,7 @@ class PortfolioSimulation:
 
         combined_df = pd.concat(all_positions)
         combined_df = combined_df.fillna(0)
-        return combined_df
+        return combined_df.reset_index()
 
 
     ##### Function to calculate monthly returns
@@ -426,7 +438,9 @@ class PortfolioSimulation:
             "Annualized mean return": np.round(annualized_return,6),
             "Annualized standard deviation": np.round(annualized_std,6),
             "Number of transactions": self.no_transactions,
-            "Skipped transactions": len(self.skipped_transactions)
+            "Number of skipped transactions": self.no_skipped_transactions,
+            "Number of buys": self.no_buys,
+            "Number of sells": self.no_sells,
         }
         
         return pf_statistics
