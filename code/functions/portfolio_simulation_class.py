@@ -32,6 +32,8 @@ class PortfolioSimulation:
         # To keep track of skipped transactions
         self.skipped_transactions = []
         self.no_skipped_transactions = 0
+        self.no_skipped_buys = 0
+        self.no_skipped_sells = 0
         # To keep track of buys and sells
         self.no_buys = 0
         self.no_sells = 0
@@ -126,6 +128,7 @@ class PortfolioSimulation:
             #print(f"Skipped BUY on {date}: Not enough capital.")
             self.skipped_transactions.append((cik, date, "Not enough capital"))
             self.no_skipped_transactions += 1
+            self.no_skipped_buys += 1
             return
         # New cash balance is simply old one, minus the price of the stock
         self.cash -= price
@@ -161,6 +164,7 @@ class PortfolioSimulation:
             # If no shares are held, the transaction is skipped
             self.skipped_transactions.append((cik, date, "No shares held"))
             self.no_skipped_transactions += 1
+            self.no_skipped_sells += 1
             return
         self.cash += price
         self.positions[cik] -= 1
@@ -324,10 +328,12 @@ class PortfolioSimulation:
     def get_positions_over_time(self):
         """Returns a DataFrame of positions at each unique transaction date (as Periods)."""
         # Set returns a list of unique dates from transactions
-        # tx[3] is the date of the transaction 
-        #unique_dates = sorted(set(pd.Period(tx[3], freq='M') for tx in self.transactions))
+        # tx[3] is the date of the transaction
         # Extract Periods from the transaction dates
-        dates = [pd.Period(tx[3], freq='M') for tx in self.transactions]
+        #dates = [pd.Period(tx[3], freq='M') for tx in self.recommendations]
+        dates = self.recommendations['date'].unique()
+        # Sort dates to ensure chronological order
+        dates = sorted(dates)
 
         # Generate full monthly range from min to max date
         unique_dates = pd.period_range(start=min(dates), end=max(dates), freq='M')
@@ -437,10 +443,12 @@ class PortfolioSimulation:
             "Standard deviation (monthly)": np.round(std_return,6),
             "Annualized mean return": np.round(annualized_return,6),
             "Annualized standard deviation": np.round(annualized_std,6),
-            "Number of transactions": self.no_transactions,
-            "Number of skipped transactions": self.no_skipped_transactions,
             "Number of buys": self.no_buys,
             "Number of sells": self.no_sells,
+            "Total number of transactions": self.no_transactions,
+            "Number of skipped buys": self.no_skipped_buys,
+            "Number of skipped sells": self.no_skipped_sells,
+            "Total number of skipped transactions": self.no_skipped_transactions,
         }
         
         return pf_statistics
