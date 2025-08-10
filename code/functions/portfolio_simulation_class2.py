@@ -10,11 +10,12 @@ import numpy as np
 # In the case of sell-side analyst recommendations, this approach assumes, that the recommendation is valid for at leastthe entire month.
 
 class PortfolioSimulation2:
-   
-    def __init__(self, initial_capital=100):
+
+    def __init__(self, initial_capital=100000, transaction_cost_rate=0.01):
         """Initialize the portfolio simulation with a given initial capital."""
         # Initialize the portfolio simulation with a given capital
         self.initial_capital = initial_capital
+        self.transaction_cost_rate = transaction_cost_rate
         # Initialize cash position to track over time (starts out as initial capital ofc)
         self.cash = initial_capital
         # Portfolio value at t = 0 is just the initial capital
@@ -37,6 +38,8 @@ class PortfolioSimulation2:
         # To keep track of buys and sells
         self.no_buys = 0
         self.no_sells = 0
+        # To keep track of transaction costs
+        self.transaction_costs = []
 
     ##### Function to load input stock prices
     def load_stock_prices(self, stock_prices_df):
@@ -103,15 +106,16 @@ class PortfolioSimulation2:
             raise ValueError("No price data available.")
 
 
-    ##### Function to simulate a stock purchase
+        ##### Function to simulate a stock purchase
     def buy(self, cik, price, date, allocation):
         """
-        Execute a buy transaction for one share of the specified stock if sufficient cash is available.
+        Execute a buy transaction for one or more shares of the specified stock if sufficient allocated cash is available.
 
-        Checks if there is enough cash to buy the stock at the given price.
-        If so, decreases cash by the price, increases the stock position by one share,
+        Checks if the allocated amount is enough to buy at least one share (including transaction fees).
+        If so, decreases cash by the amount spent, increases the stock position,
         records the transaction, and increments the transaction count.
-        If cash is insufficient, the method exits without action.
+        If the allocation is insufficient (even for one share including fees), the method exits without action.
+
         For simplicity, it assumes that the stock is bought at the end of the month.
         Further, I always just buy or sell 1 stock at a given point in time (for now).
 
@@ -119,121 +123,47 @@ class PortfolioSimulation2:
             cik (str): Stock identifier.
             price (float): Price at which the stock is bought.
             date (pd.Period or datetime-like): Date of the transaction.
+            allocation (float): The amount of cash allocated to this particular stock.
 
         Returns:
             None
-        """        
-        # Only buy if capital is sufficient
-        if price > self.cash:
-            self.skipped_transactions.append((cik, date, "Not enough capital"))
+        """
+        transaction_cost_rate = self.transaction_cost_rate  # Assume this is defined elsewhere in the class
+
+        # Compute effective cost per share including transaction fee
+        effective_price_per_share = price * (1 + transaction_cost_rate)
+
+        # Only buy if allocation is sufficient to buy at least one share including fees
+        if effective_price_per_share > allocation:
+            self.skipped_transactions.append((cik, date, "Not enough allocation for one share incl. fees"))
             self.no_skipped_transactions += 1
             self.no_skipped_buys += 1
             return
+
         # Compute how many shares can be bought with allocated cash
-       
-        qty = allocation // price # // rounds DOWN to neares integet -> only buy whole shares
-      #  print(f"Buying {qty} shares of {cik} at {price} on {date} with allocated money {allocation}.")
-        # New cash balance is simply old one, minus the price of the stock
-        self.cash -= price * qty
-        self.cash += allocation - (price * qty) # "Change" will be added to cash
+        qty = int(allocation // effective_price_per_share)  # // rounds DOWN to nearest integer -> only buy whole shares
+        # print(f"Buying {qty} shares of {cik} at {price} with an effective price of {effective_price_per_share} on {date} with allocated money {allocation}.")
+
+        # Calculate total cost including fees (consistent with effective_price_per_share)
+        final_cost = qty * effective_price_per_share
+
+        # Calculate fee as the difference between final cost and pure stock price
+        fee = final_cost - (qty * price)
+        self.transaction_costs.append(fee)  # Track transaction fees
+
+        # New cash balance is simply old one, minus the price of the stock including fees
+        self.cash -= final_cost
+        self.cash += allocation - final_cost  # "Change" from allocation will be added back to cash
+
         # To keep track of the number of positions, the dictionary is updated
         self.positions[cik] = self.positions.get(cik, 0) + qty
+
         # Append the transaction to the list to later on check positions over time
         self.transactions.append(('buy', cik, price, date, qty))
+
         # Increment the number of transactions and buys
         self.no_buys += 1
         self.no_transactions += 1
-
-
-    ##### Function to simulate a stock sale
-    def sell(self, cik, price, date):
-        """
-        Execute a sell transaction for one share of the specified stock.
-
-        Checks if the stock position exists and is greater than zero before selling.
-        Updates cash balance, reduces the stock position by one share, records the transaction,
-        and increments the transaction count. If no shares are held, the method exits without action.
-        For simplicity, it assumes that the stock is sold at the end of the month.
-        Further, I always just buy or sell 1 stock at a given point in time (for now)
-
-        Args:
-            cik (str): Stock identifier.
-            price (float): Price at which the stock is sold.
-            date (pd.Period or datetime-like): Date of the transaction.
-
-        Returns:
-            None
-        """        
-        if self.positions.get(cik, 0) == 0: # 0 inside the brackets is simply the "default" to return, if cik is not in positions
-            # If no shares are held, the transaction is skipped
-            self.skipped_transactions.append((cik, date, "No shares held"))
-            self.no_skipped_transactions += 1
-            self.no_skipped_sells += 1
-            return
-        qty = self.positions.get(cik, 0)
-        self.cash += price * qty # Increase cash by the price of the stock times the quantity held
-       # print(f"Selling {qty} shares of {cik} at {price} on {date} for a total of {price * qty}.")
-        self.positions[cik] = 0 # Set the position to 0, since we sold all shares
-        self.transactions.append(('sell', cik, price, date, qty))
-        # Increment the number of transactions and sells
-        self.no_sells += 1
-        self.no_transactions += 1
-        
-        
-
-
-    ##### Function that puts it all together
-    def simulate_trading(self):
-        """
-        Simulate monthly (quarterly) portfolio rebalancing based on 'buy', 'sell', and 'hold' signals.
-
-        For each unique month in the recommendations:
-            1. Execute all 'sell' signals first, liquidating full positions at the given month's price.
-            2. Evenly distribute the available cash across all 'buy' signals for that month.
-            3. Buy as many whole shares as possible for each recommended stock using the allocated amount.
-
-        Notes:
-            - 'Hold' signals are ignored.
-            - If price data for a stock is unavailable for the given month, the transaction is skipped.
-            - Transactions and skipped actions are logged for analysis.
-
-        Returns:
-            None
-        """
-        unique_dates = self.recommendations['date'].unique()
-
-        for date in tqdm(unique_dates, desc="Simulating Trades"):
-            recs_on_date = self.recommendations[self.recommendations['date'] == date]
-
-            # Step 1: Process all SELL signals first 
-            sell_recs = recs_on_date[recs_on_date['action'] == 'sell']
-            # Use iterrows, because we need more than 1 column: cik, price, and date
-            for _, rec in sell_recs.iterrows():
-                cik = rec['cik']
-                try:
-                    price = self.get_nearest_price(cik, date)
-                    self.sell(cik, price, date)
-                except ValueError as e:
-                    self.skipped_transactions.append((cik, date, str(e)))
-                    continue
-
-            #  Step 2: Process BUY signals with equal cash allocation 
-            buy_recs = recs_on_date[recs_on_date['action'] == 'buy']
-            n_buys = len(buy_recs)
-            if n_buys == 0:
-                continue  # Nothing to buy this month
-
-            # Money to spend on each stock (allocation) is simply the cash divided by the number of buys
-            allocation = self.cash / n_buys
-
-            for _, rec in buy_recs.iterrows():
-                cik = rec['cik']
-                try:
-                    price = self.get_nearest_price(cik, date)
-                    self.buy(cik, price, date, allocation)
-                except ValueError as e:
-                    self.skipped_transactions.append((cik, date, str(e)))
-                    continue
 
 
 
@@ -468,6 +398,7 @@ class PortfolioSimulation2:
             "Number of skipped buys": self.no_skipped_buys,
             "Number of skipped sells": self.no_skipped_sells,
             "Total number of skipped transactions": self.no_skipped_transactions,
+            "Total amount of transaction costs": np.round(np.sum(self.transaction_costs), 6)
         }
         
         return pf_statistics
