@@ -9,9 +9,9 @@ import numpy as np
 # with financial statements published at the end of a given month.
 # In the case of sell-side analyst recommendations, this approach assumes, that the recommendation is valid for at leastthe entire month.
 
-class PortfolioSimulation2:
+class PortfolioSimulation2_mcap:
 
-    def __init__(self, initial_capital=1000000, transaction_cost_rate=0.001):
+    def __init__(self, initial_capital=100000, transaction_cost_rate=0.01):
         """Initialize the portfolio simulation with a given initial capital."""
         # Initialize the portfolio simulation with a given capital
         self.initial_capital = initial_capital
@@ -40,13 +40,13 @@ class PortfolioSimulation2:
         # To keep track of buys and sells
         self.no_buys = 0
         self.no_sells = 0
-        self.no_holds = 0 
+        self.no_holds = 0
         # To keep track of transaction costs
         self.transaction_costs = []
 
-
     ##### Function to load all input dataframes
-    def load_dataframes(self, stock_prices_df: pd.DataFrame, recommendations_df: pd.DataFrame, risk_free_rate_df: pd.DataFrame):
+    def load_dataframes(self, stock_prices_df: pd.DataFrame, recommendations_df: pd.DataFrame, 
+                        mcap_df: pd.DataFrame, risk_free_rate_df: pd.DataFrame):
         """
         Load and preprocess all input DataFrames.
 
@@ -68,6 +68,11 @@ class PortfolioSimulation2:
         recommendation_df = recommendations_df.copy()
         recommendation_df['date'] = pd.to_datetime(recommendation_df['date']).dt.to_period('M')
         self.recommendations = recommendation_df
+
+        # DF containing mcap of every company at every month
+        mcap_df = mcap_df.copy()
+        mcap_df['date'] = pd.to_datetime(mcap_df['date']).dt.to_period('M')
+        self.mcap_df = mcap_df
 
         # DF containing risk-free rate (US 3 month treasury bill)
         risk_free_rate_df = risk_free_rate_df.copy()
@@ -107,6 +112,64 @@ class PortfolioSimulation2:
         else:
             raise ValueError("No price data available.")
 
+    
+    ##### Function to grab nearest market cap for a given CIK and date
+    def get_nearest_mcap(self, cik, mcap_df, date):
+        """
+        Retrieve the closest market cap date-wise for the specified stock (cik) at the given monthly period.
+
+        Converts the input date to a timestamp if necessary, then looks up the market cap
+        for that stock in the stored market cap DataFrame. If the market cap for the specified
+        month is not available, it finds the closest available date and returns that market cap.
+
+        Args:
+            cik (str): Stock identifier.
+            date (pd.Period or datetime-like): Date (or convertible) for which to get the market cap.
+
+        Returns:
+            float: The market cap for the given month.
+
+        Raises:
+            ValueError: If no market cap data is available for the specified stock and date.
+        """
+        # Convert input date to timestamp, if it isnt already
+        # If date is a Period object, convert it to a Timestamp at the month's end
+        if isinstance(date, pd.Period):
+            date = date.end_time  # This gives the last day of the month
+
+        # Convert input date to Timestamp (if not already)
+        if not isinstance(date, pd.Timestamp):
+            date = pd.to_datetime(date) + pd.offsets.MonthEnd(0)
+
+        # Normalize the date to ignore the time part (only compare day)
+        date = date.normalize() 
+        
+        # Filter to target CIK rows
+        cik_mcap_df = mcap_df[mcap_df['cik'] == cik].copy()
+        if cik_mcap_df.empty:
+            return None
+        
+        # Convert the 'date' column in cik_mcap_df to the timestamp at the end of the month
+        cik_mcap_df['date'] = pd.to_datetime(cik_mcap_df['date'].dt.to_timestamp()).apply(lambda x: x + pd.offsets.MonthEnd(0))
+        cik_mcap_df['date'] = cik_mcap_df['date'].dt.normalize()
+
+        # Check if there's an exact match for the date
+        exact_match = cik_mcap_df[cik_mcap_df['date'] == date]
+        if not exact_match.empty:
+           # print(f"Returning exact match for {cik} on date {date}")
+            # Return the exact match if found
+            closest_row = exact_match.iloc[0]
+            return closest_row['market_cap']
+        
+        # If no exact match, calculate the closest match by date difference
+        cik_mcap_df['date_diff'] = (cik_mcap_df['date'] - date).abs()
+
+        # Find the row with the minimum date difference
+        closest_row = cik_mcap_df.loc[cik_mcap_df['date_diff'].idxmin()]
+        #print(f"Returning approximate match for {cik} on date {closest_row['date']} instead of {date}")
+
+        return closest_row['market_cap']
+            
 
         ##### Function to simulate a stock purchase
     def buy(self, cik, price, date, allocation):
@@ -119,7 +182,7 @@ class PortfolioSimulation2:
         If the allocation is insufficient (even for one share including fees), the method exits without action.
 
         For simplicity, it assumes that the stock is bought at the end of the month.
-        Further, I always just buy or sell 1 stock at a given point in time (for now).
+        Currently, it buys as many whole shares as possible given the allocated cash and fees.
 
         Args:
             cik (str): Stock identifier.
@@ -130,7 +193,8 @@ class PortfolioSimulation2:
         Returns:
             None
         """
-        transaction_cost_rate = self.transaction_cost_rate  
+
+        transaction_cost_rate = self.transaction_cost_rate  # Assume this is defined elsewhere in the class
 
         # Compute effective cost per share including transaction fee
         effective_price_per_share = price * (1 + transaction_cost_rate)
@@ -143,7 +207,7 @@ class PortfolioSimulation2:
             return
 
         # Compute how many shares can be bought with allocated cash
-        qty = int(allocation // effective_price_per_share)  # // rounds DOWN to nearest integer -> only buy whole shares
+        qty = int(allocation // effective_price_per_share)  # // rounds DOWN to nearest integer -> only buy whole shares, 
 
         # Calculate total cost including fees (consistent with effective_price_per_share)
         final_cost = qty * effective_price_per_share
@@ -159,7 +223,7 @@ class PortfolioSimulation2:
         self.positions[cik] = self.positions.get(cik, 0) + qty
 
         # Append the transaction to the list to later on check positions over time
-        self.transactions.append(('buy', cik, price, date, qty))
+        self.transactions.append(('buy', cik, price, date, qty, final_cost))
 
         # Increment the number of transactions and buys
         self.no_buys += 1
@@ -171,10 +235,9 @@ class PortfolioSimulation2:
         Execute a sell transaction for one share of the specified stock.
 
         Checks if the stock position exists and is greater than zero before selling.
-        Updates cash balance, reduces the stock position by one share, records the transaction,
+        Updates cash balance, sells all stocks, records the transaction,
         and increments the transaction count. If no shares are held, the method exits without action.
         For simplicity, it assumes that the stock is sold at the end of the month.
-        Further, I always just buy or sell 1 stock at a given point in time (for now)
 
         Args:
             cik (str): Stock identifier.
@@ -193,28 +256,15 @@ class PortfolioSimulation2:
             self.no_skipped_sells += 1
             return
         
-        # Grab qty to sell from positions df
         qty = self.positions.get(cik, 0)
-        
-        # Compute gross proceeds from the sale
-        gross_proceeds = price * qty
-
-        # Compute and append transaction costs for this transaction
-        fee = gross_proceeds * transaction_cost_rate 
-        self.transaction_costs.append(fee)  
-
-        # Actual earnings, after fees are deducted
-        net_proceeds = gross_proceeds - fee 
-       
-       # Increase cash by the price of the stock times the quantity held
-        self.cash += net_proceeds 
-       
-        # Set the position to 0, since we sold all shares
-        self.positions[cik] = 0 
-        
-        # Append transaction details
-        self.transactions.append(('sell', cik, price, date, qty))
-
+        gross_proceeds = price * qty # Total proceeds from the sale
+        fee = gross_proceeds * transaction_cost_rate # Transaction costs that occur for this sale
+        self.transaction_costs.append(fee)  # Append fee to transaction costs
+        net_proceeds = gross_proceeds - fee # Actual earnings, after fees are deducted
+        self.cash += net_proceeds # Increase cash by the price of the stock times the quantity held
+        #print(f"Selling {qty} shares of {cik} at {price} on {date} for a total of {price * qty}.")
+        self.positions[cik] = 0 # Set the position to 0, since we sold all shares
+        self.transactions.append(('sell', cik, price, date, qty, net_proceeds))
         # Increment the number of transactions and sells
         self.no_sells += 1
         self.no_transactions += 1
@@ -247,44 +297,67 @@ class PortfolioSimulation2:
             # Step 1: Process hold signals
             hold_recs = recs_on_date[recs_on_date['action'] == 'hold']
             for _, rec in hold_recs.iterrows():
-                print(f"Processing a hold signal for date: {date}")
                 self.skipped_transactions.append((rec['cik'], date, "Hold signal - no action taken"))
                 self.no_skipped_transactions += 1
-                self.no_holds += 1            
+                self.no_holds += 1
+                continue
+
 
             # Step 2: Process all SELL signals first 
             sell_recs = recs_on_date[recs_on_date['action'] == 'sell']
             # Use iterrows, because we need more than 1 column: cik, price, and date
             for _, rec in sell_recs.iterrows():
-                print(f"Processing a sell signal for date: {date}")
                 cik = rec['cik']
                 try:
                     price = self.get_nearest_price(cik, date)
                     self.sell(cik, price, date)
                 except ValueError as e:
                     self.skipped_transactions.append((cik, date, str(e)))
-                    self.skipped_sells += 1
+                    self.no_skipped_transactions += 1
+                    self.no_skipped_sells += 1
+                    continue
 
             #  Step 3: Process BUY signals with equal cash allocation 
             buy_recs = recs_on_date[recs_on_date['action'] == 'buy']
-            n_buys = len(buy_recs)
-            if n_buys == 0:
+
+            if len(buy_recs) == 0:
                 continue  # Nothing to buy this month
+            
+            # Money to spend on each stock is based on share of total mcap among all buy signals
+            buy_ciks = buy_recs['cik'].values
+            # Get market caps for all buy signals
+            nearest_caps = []
+            for cik in buy_ciks:
+                mcap = self.get_nearest_mcap(cik, self.mcap_df, date)
+                if mcap is not None:
+                    nearest_caps.append((cik, mcap))
+                else:
+                    self.skipped_transactions.append((cik, date, "No market cap data found"))
+                    self.no_skipped_transactions += 1
+                    continue
 
-            # Money to spend on each stock (allocation) is simply the cash divided by the number of buys
-            allocation = self.cash / n_buys
-
-            for _, rec in buy_recs.iterrows():
-                print(f"Processing a buy signal for date: {date}")
-                cik = rec['cik']
+            # Compute total mcap of all buy signals
+            buy_signals_total_mcap = sum(mcap for _, mcap in nearest_caps)
+            mcaps_store = []
+            # Step 3: Allocate and buy
+            for cik, market_cap in nearest_caps:
                 try:
                     price = self.get_nearest_price(cik, date)
-                    self.buy(cik, price, date, allocation)
-                except ValueError as e:
-                    self.skipped_transactions.append((cik, date, str(e)))
-                    self.skipped_buys += 1
 
-            
+
+                    # Allocate money based on share of total market cap
+                    allocation = (market_cap / buy_signals_total_mcap) * self.cash
+
+                    self.buy(cik, price, date, allocation)
+                    mcaps_store.append(market_cap)
+
+                except (ValueError, IndexError) as e:
+                    self.skipped_transactions.append((cik, date, str(e)))
+                    self.no_skipped_transactions += 1
+                    self.no_skipped_buys += 1
+                    continue
+
+                
 
 
     ###### Function to get positions (i.e. cash and stocks) at a specific date
@@ -320,15 +393,15 @@ class PortfolioSimulation2:
         positions_snapshot = {'cash': self.initial_capital} 
 
         # Loop through transactions and update positions as transactions were made
-        for action, cik, price, tx_date, qty in self.transactions:
+        for action, cik, price, tx_date, qty, cost in self.transactions:
             # Only consider transactions up to the specified date
             if tx_date <= date:
                 if action == 'buy':
                     positions_snapshot[cik] = positions_snapshot.get(cik, 0) + qty
-                    positions_snapshot['cash'] -= price * qty
+                    positions_snapshot['cash'] -= cost
                 elif action == 'sell':
                     positions_snapshot[cik] = positions_snapshot.get(cik, 0) - qty
-                    positions_snapshot['cash'] += price * qty
+                    positions_snapshot['cash'] += cost
 
         # Second loop is needed, because the price of a stock at the input date is not the same as in the previous loop
         # Therefore, we have to loop over all positions and fetch the nearest price for each stock
@@ -352,21 +425,21 @@ class PortfolioSimulation2:
     
     
     ##### Function to get the monetary value of the portfolio at a specific date
-    """
-    Calculate the total monetary value of the portfolio at a specific date.
-
-    Args:
-        date (str, datetime, or pd.Period, optional): The date to evaluate the portfolio.
-            If None, the current date is used.
-
-    Returns:
-        float: The total portfolio value rounded to 4 decimals.
-
-    Notes:
-        - Uses get_positions_at_date to compute the market value of all holdings.
-        - Assumes positions already reflect all transactions up to the given date.
-    """    
     def get_portfolio_value(self, date=None):
+        """
+        Calculate the total monetary value of the portfolio at a specific date.
+
+        Args:
+            date (str, datetime, or pd.Period, optional): The date to evaluate the portfolio.
+                If None, the current date is used.
+
+        Returns:
+            float: The total portfolio value rounded to 4 decimals.
+
+        Notes:
+            - Uses get_positions_at_date to compute the market value of all holdings.
+            - Assumes positions already reflect all transactions up to the given date.
+        """    
         # Convert input date to Period (monthly)
         if not isinstance(date, pd.Period):
             date = pd.to_datetime(date).to_period('M')
@@ -468,7 +541,16 @@ class PortfolioSimulation2:
         monthly_returns = pd.DataFrame(monthly_returns)
         monthly_returns["normalized_start_value"] = monthly_returns["start_value"] / self.initial_capital
         monthly_returns["normalized_end_value"] = monthly_returns["end_value"] / self.initial_capital
-        
+        # Compute excess return
+        monthly_returns = pd.merge(
+            monthly_returns,
+            self.risk_free_rate_df,
+            left_on='month',
+            right_on='date',
+            how='left'
+        )
+        monthly_returns.drop(columns=['date', 'yearly_yield'], inplace=True)  # Drop the 'date' column after merging
+        monthly_returns["excess_return"] = monthly_returns["return"] - monthly_returns["rate"]
 
         return monthly_returns
     
@@ -492,26 +574,33 @@ class PortfolioSimulation2:
         """
         if monthly_returns is None:
             monthly_returns = self.calculate_monthly_returns()
-
+        
         # Calculate mean return
         mean_return = monthly_returns['return'].mean()
-        
+        mean_excess_return = monthly_returns['excess_return'].mean()
+
         # Calculate geometric mean return (better for compounding effects)
         geometric_mean_return = (1 + monthly_returns['return']).prod() ** (1 / len(monthly_returns)) - 1
         
         # Calculate standard deviation of returns
         std_return = monthly_returns['return'].std()
-        
+        std_excess_return = monthly_returns['excess_return'].std()
+
         # Calculate annualized return and standard deviation
         annualized_return = (1 + mean_return) ** 12 - 1
         annualized_std = std_return * np.sqrt(12)
-        
+
+        # Calculate Sharpe ratio
+        sharpe_ratio = (mean_excess_return) / std_excess_return if std_excess_return > 0 else 0
+
         pf_statistics = {
             "Mean return (monthly)": np.round(mean_return,6),
-            "Geometric mean return (monthly)": np.round(geometric_mean_return,6),
-            "Standard deviation (monthly)": np.round(std_return,6),
             "Annualized mean return": np.round(annualized_return,6),
+            "Geometric mean return (monthly)": np.round(geometric_mean_return,6),
+            "Excess mean return (monthly)": np.round(mean_excess_return,6),
+            "Standard deviation (monthly)": np.round(std_return,6),
             "Annualized standard deviation": np.round(annualized_std,6),
+            "Annualized Sharpe Ratio": np.round(sharpe_ratio*np.sqrt(12),6),
             "Number of buys": self.no_buys,
             "Number of sells": self.no_sells,
             "Number of holds": self.no_holds,
@@ -521,5 +610,5 @@ class PortfolioSimulation2:
             "Total number of skipped transactions": self.no_skipped_transactions,
             "Total amount of transaction costs": np.round(np.sum(self.transaction_costs), 6)
         }
-        
+
         return pf_statistics
