@@ -247,7 +247,6 @@ class PortfolioSimulation2:
             # Step 1: Process hold signals
             hold_recs = recs_on_date[recs_on_date['action'] == 'hold']
             for _, rec in hold_recs.iterrows():
-                print(f"Processing a hold signal for date: {date}")
                 self.skipped_transactions.append((rec['cik'], date, "Hold signal - no action taken"))
                 self.no_skipped_transactions += 1
                 self.no_holds += 1            
@@ -256,14 +255,13 @@ class PortfolioSimulation2:
             sell_recs = recs_on_date[recs_on_date['action'] == 'sell']
             # Use iterrows, because we need more than 1 column: cik, price, and date
             for _, rec in sell_recs.iterrows():
-                print(f"Processing a sell signal for date: {date}")
                 cik = rec['cik']
                 try:
                     price = self.get_nearest_price(cik, date)
                     self.sell(cik, price, date)
                 except ValueError as e:
                     self.skipped_transactions.append((cik, date, str(e)))
-                    self.skipped_sells += 1
+                    self.no_skipped_sells += 1
 
             #  Step 3: Process BUY signals with equal cash allocation 
             buy_recs = recs_on_date[recs_on_date['action'] == 'buy']
@@ -275,14 +273,13 @@ class PortfolioSimulation2:
             allocation = self.cash / n_buys
 
             for _, rec in buy_recs.iterrows():
-                print(f"Processing a buy signal for date: {date}")
                 cik = rec['cik']
                 try:
                     price = self.get_nearest_price(cik, date)
                     self.buy(cik, price, date, allocation)
                 except ValueError as e:
                     self.skipped_transactions.append((cik, date, str(e)))
-                    self.skipped_buys += 1
+                    self.no_skipped_buys += 1
 
             
 
@@ -519,6 +516,8 @@ class PortfolioSimulation2:
             "Number of skipped buys": self.no_skipped_buys,
             "Number of skipped sells": self.no_skipped_sells,
             "Total number of skipped transactions": self.no_skipped_transactions,
+            "Overall transaction count": self.no_transactions + self.no_skipped_transactions,
+            "Number of recommendations": len(self.recommendations),
             "Total amount of transaction costs": np.round(np.sum(self.transaction_costs), 6)
         }
         
