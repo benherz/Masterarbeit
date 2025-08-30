@@ -541,6 +541,7 @@ class PortfolioSimulation2_mcap:
         monthly_returns = pd.DataFrame(monthly_returns)
         monthly_returns["normalized_start_value"] = monthly_returns["start_value"] / self.initial_capital
         monthly_returns["normalized_end_value"] = monthly_returns["end_value"] / self.initial_capital
+        
         # Compute excess return
         monthly_returns = pd.merge(
             monthly_returns,

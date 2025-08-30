@@ -1,6 +1,7 @@
 import pandas as pd
 from tqdm import tqdm
 import numpy as np
+import math
 
 # Throughout this class, I generally only consider MONTHLY data. (Recommendations and stock prices)
 # LLM, as well as sell-side analyst recommendations for a given month will be processed along with the
@@ -15,7 +16,6 @@ class PortfolioSimulation2:
         """Initialize the portfolio simulation with a given initial capital."""
         # Initialize the portfolio simulation with a given capital
         self.initial_capital = initial_capital
-        self.transaction_cost_rate = transaction_cost_rate
         # Initialize cash position to track over time (starts out as initial capital ofc)
         self.cash = initial_capital
         # Portfolio value at t = 0 is just the initial capital
@@ -30,19 +30,23 @@ class PortfolioSimulation2:
         self.recommendations = pd.DataFrame()  
         self.mcap_df = pd.DataFrame()
         self.risk_free_rate_df = pd.DataFrame()
-        # To keep track of the number of transactions
-        self.no_transactions = 0
         # To keep track of skipped transactions
         self.skipped_transactions = []
         self.no_skipped_transactions = 0
         self.no_skipped_buys = 0
         self.no_skipped_sells = 0
-        # To keep track of buys and sells
-        self.no_buys = 0
-        self.no_sells = 0
-        self.no_holds = 0 
-        # To keep track of transaction costs
-        self.transaction_costs = []
+        # To keep track of buys and sells that were signaled
+        self.no_signal_buys = 0
+        self.no_signal_sells = 0
+        self.no_signal_holds = 0
+        self.no_signal_total = 0
+        # To keep track of executed sells (liquidating PF at every month)
+        self.no_executed_sells = 0
+        self.no_executed_buys = 0
+        self.no_executed_transactions = 0
+
+        # Indicator if buying of partial shares is allowed
+        self.partial_shares = False
 
 
     ##### Function to load all input dataframes
@@ -130,30 +134,26 @@ class PortfolioSimulation2:
         Returns:
             None
         """
-        transaction_cost_rate = self.transaction_cost_rate  
 
-        # Compute effective cost per share including transaction fee
-        effective_price_per_share = price * (1 + transaction_cost_rate)
-
-        # Only buy if allocation is sufficient to buy at least one share including fees
-        if effective_price_per_share > allocation:
-            self.skipped_transactions.append((cik, date, "Not enough allocation for one share incl. fees"))
-            self.no_skipped_transactions += 1
-            self.no_skipped_buys += 1
-            return
+        # # Only buy if allocation is sufficient to buy at least one share including fees
+        # if price > allocation:
+        #     self.skipped_transactions.append((cik, date, f"Not enough allocation for one share. Price: {price}. Allocation: {allocation}."))
+        #     self.no_skipped_transactions += 1
+        #     self.no_skipped_buys += 1
+        #     return
 
         # Compute how many shares can be bought with allocated cash
-        qty = int(allocation // effective_price_per_share)  # // rounds DOWN to nearest integer -> only buy whole shares
-
-        # Calculate total cost including fees (consistent with effective_price_per_share)
-        final_cost = qty * effective_price_per_share
-
-        # Calculate fee as the difference between final cost and pure stock price
-        fee = final_cost - (qty * price)
-        self.transaction_costs.append(fee)  # Track transaction fees
+        # If we allow for the purchase of partial shares, math.floor is employed to round down
+        if self.partial_shares:
+            qty = math.floor(allocation / price * 100) / 100
+        else:
+            qty = int(allocation // price)  # // rounds DOWN to nearest integer -> only buy whole shares
+            
+        # Compute cost of the purchase
+        costs = price * qty
 
         # New cash balance is simply old one, minus the price of the stock including fees
-        self.cash -= final_cost
+        self.cash -= costs
 
         # To keep track of the number of positions, the dictionary is updated
         self.positions[cik] = self.positions.get(cik, 0) + qty
@@ -162,8 +162,9 @@ class PortfolioSimulation2:
         self.transactions.append(('buy', cik, price, date, qty))
 
         # Increment the number of transactions and buys
-        self.no_buys += 1
-        self.no_transactions += 1
+        self.no_executed_buys += 1
+        self.no_executed_transactions += 1
+
 
   ##### Function to simulate a stock sale
     def sell(self, cik, price, date):
@@ -184,11 +185,10 @@ class PortfolioSimulation2:
         Returns:
             None
         """
-        transaction_cost_rate = self.transaction_cost_rate  # Assume this is defined elsewhere in the class
 
         if self.positions.get(cik, 0) == 0: # 0 inside the brackets is simply the "default" to return, if cik is not in positions
             # If no shares are held, the transaction is skipped
-            self.skipped_transactions.append((cik, date, "No shares held"))
+            self.skipped_transactions.append(("Sell signal", cik, date, "No shares held"))
             self.no_skipped_transactions += 1
             self.no_skipped_sells += 1
             return
@@ -197,18 +197,11 @@ class PortfolioSimulation2:
         qty = self.positions.get(cik, 0)
         
         # Compute gross proceeds from the sale
-        gross_proceeds = price * qty
+        earnings = price * qty
 
-        # Compute and append transaction costs for this transaction
-        fee = gross_proceeds * transaction_cost_rate 
-        self.transaction_costs.append(fee)  
+        # Increase cash by the price of the stock times the quantity held
+        self.cash += earnings
 
-        # Actual earnings, after fees are deducted
-        net_proceeds = gross_proceeds - fee 
-       
-       # Increase cash by the price of the stock times the quantity held
-        self.cash += net_proceeds 
-       
         # Set the position to 0, since we sold all shares
         self.positions[cik] = 0 
         
@@ -216,8 +209,8 @@ class PortfolioSimulation2:
         self.transactions.append(('sell', cik, price, date, qty))
 
         # Increment the number of transactions and sells
-        self.no_sells += 1
-        self.no_transactions += 1
+        self.no_executed_sells += 1
+        self.no_executed_transactions += 1
        
 
 
@@ -239,7 +232,7 @@ class PortfolioSimulation2:
         Returns:
             None
         """
-        unique_dates = self.recommendations['date'].unique()
+        unique_dates = self.recommendations['date'].sort_values(ascending = True).unique()
 
         for date in tqdm(unique_dates, desc="Simulating Trades"):
             recs_on_date = self.recommendations[self.recommendations['date'] == date]
@@ -247,41 +240,62 @@ class PortfolioSimulation2:
             # Step 1: Process hold signals
             hold_recs = recs_on_date[recs_on_date['action'] == 'hold']
             for _, rec in hold_recs.iterrows():
-                self.skipped_transactions.append((rec['cik'], date, "Hold signal - no action taken"))
-                self.no_skipped_transactions += 1
-                self.no_holds += 1            
+                self.skipped_transactions.append(("Hold signal", rec['cik'], date, "Hold signal - no action taken"))
+                self.no_skipped_transactions += 1 # could as well be an executed transaction
+                self.no_signal_holds += 1
+                self.no_signal_total += 1
 
-            # Step 2: Process all SELL signals first 
+            # Step 2a: Track explicit sell signals
             sell_recs = recs_on_date[recs_on_date['action'] == 'sell']
-            # Use iterrows, because we need more than 1 column: cik, price, and date
             for _, rec in sell_recs.iterrows():
-                cik = rec['cik']
-                try:
-                    price = self.get_nearest_price(cik, date)
-                    self.sell(cik, price, date)
-                except ValueError as e:
-                    self.skipped_transactions.append((cik, date, str(e)))
-                    self.no_skipped_sells += 1
+                self.no_signal_sells += 1
+                self.no_signal_total += 1                
+
+            # Step 2b: Sell every stock that is currently in the PF
+           # sell_counter = 0
+            sell_ciks = []
+            #print(f"Date: {date}.  Positions before selling: {self.positions}")
+            for cik,qty in self.positions.items():
+                if qty > 0:
+                    try: 
+                        price = self.get_nearest_price(cik, date)
+                        self.sell(cik, price, date)
+                       # sell_counter += 1
+                        sell_ciks.append(cik)
+                    except ValueError as e:
+                        self.skipped_transactions.append((cik, date, str(e)))
+                        self.no_skipped_sells += 1
+                        self.no_skipped_transactions += 1
+           # print(f"Total sold in {date}: {sell_counter}")
+            #print(f"Date: {date}. Sold CIKS: {sell_ciks}")
+            #print(f"Date: {date}.  Positions after selling: {self.positions}")
 
             #  Step 3: Process BUY signals with equal cash allocation 
+           # buy_counter = 0
+            buy_ciks = []
             buy_recs = recs_on_date[recs_on_date['action'] == 'buy']
             n_buys = len(buy_recs)
             if n_buys == 0:
-                continue  # Nothing to buy this month
-
+                continue  # Nothing to buy this month, continue at next date (month)
             # Money to spend on each stock (allocation) is simply the cash divided by the number of buys
             allocation = self.cash / n_buys
-
+            # Iterating over all buy rec rows
             for _, rec in buy_recs.iterrows():
+                self.no_signal_buys += 1
+                self.no_signal_total += 1
                 cik = rec['cik']
                 try:
                     price = self.get_nearest_price(cik, date)
                     self.buy(cik, price, date, allocation)
+                    #buy_counter += 1
+                    buy_ciks.append(cik)
                 except ValueError as e:
-                    self.skipped_transactions.append((cik, date, str(e)))
+                    self.skipped_transactions.append(("Buy signal", cik, date, str(e)))
                     self.no_skipped_buys += 1
+                    self.no_skipped_transactions += 1
+            #print(f"Date: {date}. Bought CIKS: {buy_ciks}")
+            #print(f"Total bought in {date}: {buy_counter}")
 
-            
 
 
     ###### Function to get positions (i.e. cash and stocks) at a specific date
@@ -444,11 +458,11 @@ class PortfolioSimulation2:
 
         # Empty list to append monthly returns to 
         monthly_returns = []
-
+        # Starting at 1, because first month wont have any returns
         for i in tqdm(range(1, len(all_months)), desc="Calculating Monthly Returns"):
 
             month = all_months[i]
-            prev_month = all_months[i - 1]
+            prev_month = all_months[i - 1] if i > 0 else None
 
             value_start = self.get_portfolio_value(prev_month)
             value_end = self.get_portfolio_value(month)
@@ -465,9 +479,20 @@ class PortfolioSimulation2:
         monthly_returns = pd.DataFrame(monthly_returns)
         monthly_returns["normalized_start_value"] = monthly_returns["start_value"] / self.initial_capital
         monthly_returns["normalized_end_value"] = monthly_returns["end_value"] / self.initial_capital
-        
 
-        return monthly_returns
+        # Compute excess return
+        monthly_returns = pd.merge(
+            monthly_returns,
+            self.risk_free_rate_df,
+            left_on='month',
+            right_on='date',
+            how='left'
+        )
+        monthly_returns.drop(columns=['date', 'yearly_yield'], inplace=True)  # Drop the 'date' column after merging
+        monthly_returns["excess_return"] = monthly_returns["return"] - monthly_returns["rate"]
+
+        return monthly_returns        
+        
     
     ##### Function to calculate portfolio statistics
     def portfolio_statistics(self, monthly_returns=None):
@@ -492,33 +517,49 @@ class PortfolioSimulation2:
 
         # Calculate mean return
         mean_return = monthly_returns['return'].mean()
+        mean_excess_return = monthly_returns['excess_return'].mean()        
         
         # Calculate geometric mean return (better for compounding effects)
         geometric_mean_return = (1 + monthly_returns['return']).prod() ** (1 / len(monthly_returns)) - 1
         
         # Calculate standard deviation of returns
         std_return = monthly_returns['return'].std()
+        std_excess_return = monthly_returns['excess_return'].std()        
         
         # Calculate annualized return and standard deviation
-        annualized_return = (1 + mean_return) ** 12 - 1
+        annualized_return = (1 + geometric_mean_return) ** 12 - 1
         annualized_std = std_return * np.sqrt(12)
+
+        # Calculate Sharpe ratio
+        sharpe_ratio = (mean_excess_return) / std_excess_return if std_excess_return > 0 else 0     
+
+        # maybe add
+        # - Value at Risk
+        # - Expected Shortfall
+        # - Maximum drawdown
+        # - Treynor Ratio (requires CAPM regression for Beta)
         
+
         pf_statistics = {
             "Mean return (monthly)": np.round(mean_return,6),
             "Geometric mean return (monthly)": np.round(geometric_mean_return,6),
             "Standard deviation (monthly)": np.round(std_return,6),
             "Annualized mean return": np.round(annualized_return,6),
             "Annualized standard deviation": np.round(annualized_std,6),
-            "Number of buys": self.no_buys,
-            "Number of sells": self.no_sells,
-            "Number of holds": self.no_holds,
-            "Total number of transactions": self.no_transactions,
+            "Annualized Sharpe Ratio": np.round(sharpe_ratio*np.sqrt(12),6),
+            "Number of buy signals": self.no_signal_buys,
+            "Number of sell signals": self.no_signal_sells,
+            "Number of hold signals": self.no_signal_holds,
+            "Number of signals": self.no_signal_total,
+            "Number of executed buys": self.no_executed_buys,
+            "Number of executed sells": self.no_executed_sells,
+            "Number of executed transactions": self.no_executed_transactions,
             "Number of skipped buys": self.no_skipped_buys,
             "Number of skipped sells": self.no_skipped_sells,
             "Total number of skipped transactions": self.no_skipped_transactions,
-            "Overall transaction count": self.no_transactions + self.no_skipped_transactions,
+            "Overall transaction count": self.no_executed_transactions + self.no_skipped_transactions,
             "Number of recommendations": len(self.recommendations),
-            "Total amount of transaction costs": np.round(np.sum(self.transaction_costs), 6)
+            "Final Portfolio value (normalized)": monthly_returns['normalized_end_value'].iloc[-1],
         }
         
         return pf_statistics
