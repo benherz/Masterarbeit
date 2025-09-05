@@ -10,7 +10,7 @@ import math
 # with financial statements published at the end of a given month.
 # In the case of sell-side analyst recommendations, this approach assumes, that the recommendation is valid for at leastthe entire month.
 
-class PortfolioSimulation:
+class PortfolioSimulation_fast:
 
     def __init__(self, initial_capital=1000000, transaction_cost_rate=0.001):
         """Initialize the portfolio simulation with a given initial capital."""
@@ -455,33 +455,28 @@ class PortfolioSimulation:
             end=recs['date'].max()
         )
 
-        # Empty list to append monthly returns to 
-        monthly_returns = []
-        # Starting at 1, because first month wont have any returns
-        for i in tqdm(range(1, len(all_months)), desc="Calculating Monthly Returns"):
+        # Empty list to store PF values
+        portfolio_values = []
+        for month in tqdm(all_months, desc = "Computing Monthly PF values"): 
+            pf_value = self.get_portfolio_value(month)
+            portfolio_values.append((month, pf_value))
+        
+        # Convert to DataFrame
+        pf_values_df = pd.DataFrame(portfolio_values, columns=['month', 'end_value'])
 
-            month = all_months[i]
-            prev_month = all_months[i - 1] if i > 0 else None
+        # Calculate start values by shifting end values down by one row
+        pf_values_df['start_value'] = pf_values_df['end_value'].shift(1)
 
-            value_start = self.get_portfolio_value(prev_month)
-            value_end = self.get_portfolio_value(month)
+        # Calculate returns
+        pf_values_df['return'] = (pf_values_df['end_value'] - pf_values_df['start_value']) / pf_values_df['start_value']
 
-            ret = (value_end - value_start) / value_start if value_start > 0 else 0
-
-            monthly_returns.append({
-                'month': month,
-                'start_value': value_start,
-                'end_value': value_end,
-                'return': np.round(ret, 6)
-            })
-       
-        monthly_returns = pd.DataFrame(monthly_returns)
-        monthly_returns["normalized_start_value"] = monthly_returns["start_value"] / self.initial_capital
-        monthly_returns["normalized_end_value"] = monthly_returns["end_value"] / self.initial_capital
+        # Normalize start and end values to initial capital
+        pf_values_df['normalized_start_value'] = pf_values_df['start_value'] / self.initial_capital
+        pf_values_df['normalized_end_value'] = pf_values_df['end_value'] / self.initial_capital
 
         # Compute excess return
         monthly_returns = pd.merge(
-            monthly_returns,
+            pf_values_df,
             self.risk_free_rate_df,
             left_on='month',
             right_on='date',
@@ -490,9 +485,12 @@ class PortfolioSimulation:
         monthly_returns.drop(columns=['date', 'yearly_yield'], inplace=True)  # Drop the 'date' column after merging
         monthly_returns["excess_return"] = monthly_returns["return"] - monthly_returns["rate"]
 
-        return monthly_returns        
-        
-    
+        # Drop first row, as no returns can be computed for it
+        monthly_returns = monthly_returns.iloc[1:]
+
+        return monthly_returns            
+
+
     ##### Function to calculate portfolio statistics
     def portfolio_statistics(self, monthly_returns=None):
         """
