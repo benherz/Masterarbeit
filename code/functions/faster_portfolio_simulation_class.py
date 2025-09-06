@@ -556,7 +556,7 @@ class PortfolioSimulation_fast:
             "Total number of skipped transactions": self.no_skipped_transactions,
             "Overall transaction count": self.no_executed_transactions + self.no_skipped_transactions,
             "Number of recommendations": len(self.recommendations),
-            "Final Portfolio value (normalized)": monthly_returns['normalized_end_value'].iloc[-1],
+            "Final Portfolio value (normalized)": np.round(monthly_returns['normalized_end_value'].iloc[-1], 6),
         }
         
         return pf_statistics
