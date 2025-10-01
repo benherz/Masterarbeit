@@ -31,8 +31,7 @@ def signal_shares_lineplot_quarters(recommendations_df: pd.DataFrame, llm_indica
     # Convert counts to shares (per quarter)
     signal_shares = signal_counts.div(signal_counts.sum(axis=1), axis=0)
 
-    
-    # Capitalize action names for legend
+    # Capitalize action names for legend, this also orders them alphabetically, enabling consistent color mapping
     signal_shares.columns = [col.capitalize() for col in signal_shares.columns]
     
     # Professional colors (consistent with your stackplot)
@@ -116,7 +115,6 @@ def signal_shares_lineplot_yearlymean(recommendations_df: pd.DataFrame, llm_indi
     # Legend
     ax.legend(loc="upper right", title="Action", fontsize=12, title_fontsize=12, markerscale=1.5, borderaxespad=0.1)
 
-
     # Titles and labels
     ax.set_title("Share of LLM Signals Over Time (Yearly average)" if llm_indicator else "Share of Analyst Signals Over Time (Yearly average)",
                  fontsize=14)
@@ -137,6 +135,93 @@ def signal_shares_lineplot_yearlymean(recommendations_df: pd.DataFrame, llm_indi
     ax.grid(axis="x", linestyle="--", alpha=0.9)
 
     plt.tight_layout()
+    plt.show()
+
+
+
+
+
+##### Function to plot signal shares (over time) lineplot per economic sector with yearly mean #####
+def signal_shares_lineplot_per_sector(recommendations_df: pd.DataFrame, llm_indicator=True):
+    # Copy input df
+    df = recommendations_df.copy()
+    df["temp_date"] = pd.to_datetime(df["date"], format="%Y-%m")
+    df["year"] = df["temp_date"].dt.year
+
+    # Filter years and quarters
+    df = df[(df["year"] >= 2000) & (df["year"] <= 2025)]
+    df = df[df["temp_date"].dt.month.isin([3, 6, 9, 12])]
+
+    # Determine unique sectors
+    sectors = df["sector"].unique()
+    n_sectors = df["sector"].nunique()
+
+    # Setup grid of subplots
+    ncols = 3
+    nrows = int(np.ceil(n_sectors / ncols))
+    fig, axes = plt.subplots(
+        nrows=nrows, ncols=ncols, figsize=(18, 5 * nrows), sharex=False, sharey=True
+    )
+    axes = axes.flatten()
+
+    for i, sector in enumerate(sectors):
+        ax = axes[i]
+        sector_df = df[df["sector"] == sector]
+
+        # Count signals per quarter per sector
+        signal_counts = sector_df.groupby(["temp_date", "action"]).size().unstack(fill_value=0)
+
+        # Skip empty sectors
+        if signal_counts.empty:
+            continue
+
+        # Convert counts to shares (per quarter)
+        signal_shares = signal_counts.div(signal_counts.sum(axis=1), axis=0)
+
+        # Take yearly mean across quarters
+        signal_shares["year"] = signal_shares.index.year
+        signal_shares_yearly = signal_shares.groupby("year").mean()
+
+        # Capitalize + enforce consistent order (Buy, Hold, Sell)
+        signal_shares_yearly = signal_shares_yearly.rename(columns=str.capitalize)
+        signal_shares_yearly = signal_shares_yearly.reindex(columns=["Buy", "Hold", "Sell"], fill_value=0)
+
+        # Plot yearly averages
+        colors = [SIGNAL_COLORS["Buy"], SIGNAL_COLORS["Hold"], SIGNAL_COLORS["Sell"]]
+        signal_shares_yearly.plot(ax=ax, color=colors, linewidth=2.5)
+
+        # Titles & labels
+        ax.set_title(sector, fontsize=12)
+        ax.set_ylim(0, 1)
+        ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+        ax.grid(axis="y", linestyle="--", alpha=0.7)
+
+        # X-axis ticks/labels
+        ax.set_xticks(signal_shares_yearly.index[::2])
+        ax.set_xticklabels(signal_shares_yearly.index[::2], rotation=45)
+        ax.set_xlabel("Year", fontsize=12)
+
+        # Legend
+        ax.legend(loc="upper right", title="Action", fontsize=12, title_fontsize=12, markerscale=1.5, borderaxespad=0.1)
+
+    # Remove last axis (plot frame) if not needed
+    for j in range(n_sectors, len(axes)):
+        if axes[j] in fig.axes:
+            fig.delaxes(axes[j])
+
+    # Global labels
+    plt.suptitle(
+        "Share of LLM Signals Over Time by Sector (Yearly Mean)"
+        if llm_indicator
+        else "Share of Analyst Signals Over Time by Sector (Yearly Mean)",
+        fontsize=20,
+        y=0.9,
+        x = 0.5,
+    )
+   # fig.text(0.5, 0.04, "Year", ha="center", fontsize=18)
+    fig.text(0.04, 0.5, "Share (%)", va="center", rotation="vertical", fontsize=18)
+
+    plt.tight_layout(rect=[0.05, 0.05, 1, 0.9])
     plt.show()
 
 
@@ -249,7 +334,7 @@ def plot_signal_shares_per_sector(recommendations_df: pd.DataFrame, llm_indicato
     nrows = int(np.ceil(n_sectors / ncols))
 
     fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(15, 15))
-    axes = axes.flatten()
+    axes = axes.flatten() # axes.flatten converts 2D array to 1D array for easy indexing in iteration
 
     for i, sector in enumerate(sectors):
         
@@ -258,6 +343,9 @@ def plot_signal_shares_per_sector(recommendations_df: pd.DataFrame, llm_indicato
 
         # Filter df for current sector
         sector_df = plot_df[plot_df["sector"] == sector]
+        # Determine number of recommendations and companies in sector
+        n_recommendations = sector_df.shape[0]
+        n_companies = sector_df["cik"].nunique()
 
         # Compute signal shares
         shares = sector_df["action"].value_counts(normalize=True)
@@ -266,15 +354,20 @@ def plot_signal_shares_per_sector(recommendations_df: pd.DataFrame, llm_indicato
         
         # Bar plot
         ax.bar(shares.index.str.capitalize(), shares.values, color=[SIGNAL_COLORS[s.capitalize()] for s in shares.index])
+        # Add grid lines
+        ax.grid(True, axis='y', linestyle='--', color='gray', alpha=0.5)
         ax.set_title(f"Sector: {sector}", fontsize=14)
         ax.set_ylabel("Share (%)", fontsize=12)
         ax.set_ylim(0,1)
         ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+        # Create custom legend without line and add line break
+        legend_label = f"No Signals: {n_recommendations}\nNo Companies: {n_companies}"
+        ax.legend([legend_label], fontsize=10, loc="upper right", frameon=False, handlelength=0, labelspacing=1.2) # handlelength 0 removes the line in legend
 
-    # Remove last axis if not needed
+    # Remove last axis (plot frame) if not needed
     if n_sectors < len(axes):
         for j in range(n_sectors, len(axes)):
-            fig.delaxes(axes[j])
+            fig.delaxes(axes[j])       
 
     plt.tight_layout()
     plt.suptitle(
