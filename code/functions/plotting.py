@@ -2,12 +2,15 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import PercentFormatter
+import shap
+from matplotlib.colors import ListedColormap
+import seaborn as sns
 
 # Set color scheme for plots
 SIGNAL_COLORS = { # convention to use all caps, because this remains constant
-    "Sell": "#d1495b",
-    "Hold": "#6c757d",
-    "Buy": "#1f4e79"
+    "Sell": "#C62828",
+    "Hold": "#78909C",
+    "Buy": "#2E7D32"
 }
 
 
@@ -380,3 +383,139 @@ def plot_signal_shares_per_sector(recommendations_df: pd.DataFrame, llm_indicato
 
 
 
+
+##### Function to plot multiclass global SHAP values #####,
+def plot_multiclass_shap(shap_values, X_data, model_classes, input_title):
+
+    # Prepare Data
+    X_cleaned = X_data.copy()
+    X_cleaned.columns = [c.replace('_', ' ').title() for c in X_cleaned.columns]
+    
+    # Capitalize and format class labels
+    class_labels = [str(cls).capitalize() for cls in model_classes]
+    if input_title == "Feature Attribution Gemini Decisions": 
+        color_map =  ListedColormap(sns.color_palette(["#C62828", "#2E7D32", "#78909C"]).as_hex())
+    else: 
+        color_map = ListedColormap(sns.color_palette(["#2E7D32", "#78909C", "#C62828"]).as_hex())
+    
+    # 4. Create Figure
+    fig, ax = plt.subplots(figsize=(11, 7))
+    
+    # SHAP Plot
+    shap.summary_plot(
+        shap_values, 
+        X_cleaned, 
+        plot_type="bar", 
+        class_names=class_labels,
+        show=False,
+        color = color_map
+    )
+
+    # 6. Refined Styling
+    # Center the title and increase padding
+    plt.title(input_title, 
+              fontsize=14, 
+              pad=20, 
+              x = 0.2)
+
+    # Add a light vertical grid to help compare bar lengths
+    ax.xaxis.grid(True, linestyle='--', alpha=0.6, zorder=0)
+    ax.set_axisbelow(True)
+    
+    # Clean up labels
+    plt.xlabel("Mean |SHAP Value| (Average impact on model output magnitude)", 
+               fontsize=12, labelpad=15, x = 0.2)
+    plt.ylabel("Financial Metrics", fontsize=12, labelpad=15)
+    plt.yticks(fontsize=10)
+
+    # 7. Final Polish and Save
+    plt.tight_layout()
+    
+    # Save with high resolution for print
+    filename = f"SHAP_Global_{input_title.replace(' ', '_')}.png"
+    plt.savefig(f"../figures/{filename}", dpi=400, bbox_inches='tight')
+    plt.show()
+
+
+
+
+##### Function to plot SHAP waterfall for individual samples #####,
+def plot_waterfall(idx, 
+                   shap_values_llm, shap_values_analyst,
+                   input_df, 
+                   explainer_llm, explainer_analyst, 
+                   model_classes):
+    # Needs to be redefined here to use in script
+    financial_metric_cols = [
+    # "price_to_earnings",    
+    # "book_to_market",
+    "interest_coverage",    
+    # "market_capitalization",
+    # "cash_flow_to_price",
+    "return_on_equity",
+    "working_capital_to_total_assets",
+    "retained_earnings_to_total_assets",
+    "ebit_to_total_assets",
+    # "market_cap_to_total_liabilities",
+    "sales_to_assets",
+    "operating_margin",
+    "debt_to_equity",
+    "debt_to_assets"
+]
+    import matplotlib as mpl
+    mpl.rcParams.update({'ytick.labelsize': 7})
+    # Identify the predicted class for the sample
+    prediction_llm = input_df.iloc[idx]["pred_llm"] 
+    prediction_analyst = input_df.iloc[idx]["pred_analyst"]
+    class_idx_llm = list(model_classes).index(prediction_llm)
+    class_idx_analyst = list(model_classes).index(prediction_analyst)
+
+    # Further information to identify the sample
+    date = pd.to_datetime(input_df.iloc[idx]['date']).strftime('%m-%Y')
+    cik = input_df.iloc[idx]['cik']
+
+    # 2. Clean Feature Names & Round Data
+    features = input_df[financial_metric_cols].apply(pd.to_numeric, errors='coerce')
+    processed_features = [c.replace('_', ' ').title() for c in features.columns]
+    formatted_data = [round(val, 2) for val in features.iloc[idx].values]
+
+    # Two explanations: one for LLM, one for Analyst
+    exp_llm = shap.Explanation(
+        values=shap_values_llm[idx, :, class_idx_llm],
+        base_values=explainer_llm.expected_value[class_idx_llm],
+        data=formatted_data,
+        feature_names=processed_features
+    )
+    exp_analyst = shap.Explanation(
+        values=shap_values_analyst[idx, :, class_idx_analyst], 
+        base_values=explainer_analyst.expected_value[class_idx_analyst],
+        data=formatted_data,
+        feature_names=processed_features
+    )
+   
+    # 4. Plotting
+    fig = plt.figure(figsize=(10, 10), dpi=300)
+    
+    # Subplot 1: LLM
+    ax1 = fig.add_subplot(2, 1, 1)
+    shap.plots.waterfall(exp_llm, max_display=10, show=False) # show = False so that the plot can further be adjusted
+    # Surgical Font Size Adjustment, what a pain to find out
+    ax1.tick_params(axis='y', labelsize=7) # shrink names
+    plt.title(f"LLM Reasoning: {str(prediction_llm).capitalize()} for CIK {cik} in {date}", 
+              x=0.0, loc='left', fontsize=10, fontweight='bold', pad=15)
+
+    
+    # Second Waterfall for Analyst
+    ax2 = fig.add_subplot(2, 1, 2)
+    shap.plots.waterfall(exp_analyst, show=False) 
+    ax2.tick_params(axis='y', labelsize=7) 
+    plt.title(f"Analyst Reasoning: {str(prediction_analyst).capitalize()} for CIK {cik} in {date}", 
+              x=0.0, loc='left', fontsize=10, fontweight='bold', pad=15)
+  
+    
+    ax = plt.gca()
+    ax.tick_params(axis='both', which='major', labelsize=10, labelcolor='#555555') 
+    plt.xlabel("Contribution to Prediction Confidence", fontsize=10, color='#555555')
+    plt.tight_layout()
+    plt.savefig(f"../figures/SHAP_Waterfall_llm_{prediction_llm}_analyst_{prediction_analyst}.png", dpi=400, bbox_inches='tight')
+    plt.show()
