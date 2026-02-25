@@ -8,7 +8,7 @@ import math
 # monthly closing price of the respective stock. 
 # In the case of LLM recommendations, this isn't even a big issue, since the recommendations were generated
 # with financial statements published at the end of a given month.
-# In the case of sell-side analyst recommendations, this approach assumes, that the recommendation is valid for at leastthe entire month.
+# In the case of sell-side analyst recommendations, this approach assumes, that the recommendation is valid for at least the entire month.
 
 class PortfolioSimulation_fast:
 
@@ -121,9 +121,7 @@ class PortfolioSimulation_fast:
         If so, decreases cash by the amount spent, increases the stock position,
         records the transaction, and increments the transaction count.
         If the allocation is insufficient (even for one share including fees), the method exits without action.
-
         For simplicity, it assumes that the stock is bought at the end of the month.
-        Further, I always just buy or sell 1 stock at a given point in time (for now).
 
         Args:
             cik (str): Stock identifier.
@@ -216,12 +214,12 @@ class PortfolioSimulation_fast:
     ##### Function that puts it all together
     def simulate_trading(self):
         """
-        Simulate monthly (quarterly) portfolio rebalancing based on 'buy', 'sell', and 'hold' signals.
+        Simulate monthly portfolio rebalancing based on 'buy', 'sell', and 'hold' signals.
 
         For each unique month in the recommendations:
             1. Execute all 'sell' signals first, liquidating full positions at the given month's price.
             2. Evenly distribute the available cash across all 'buy' signals for that month.
-            3. Buy as many whole shares as possible for each recommended stock using the allocated amount.
+            3. Buy as many shares as possible for each recommended stock using the allocated amount.
 
         Notes:
             - 'Hold' signals are ignored.

@@ -5,9 +5,10 @@ from matplotlib.ticker import PercentFormatter
 import shap
 from matplotlib.colors import ListedColormap
 import seaborn as sns
+import matplotlib.dates as mdates
 
 # Set color scheme for plots
-SIGNAL_COLORS = { # convention to use all caps, because this remains constant
+SIGNAL_COLORS = { 
     "Sell": "#C62828",
     "Hold": "#78909C",
     "Buy": "#2E7D32"
@@ -15,7 +16,7 @@ SIGNAL_COLORS = { # convention to use all caps, because this remains constant
 
 
 ##### Function to plot signal shares lineplot over time (quarterly) #####
-def signal_shares_lineplot_quarters(recommendations_df: pd.DataFrame, llm_indicator=True):
+def signal_shares_lineplot_quarters(recommendations_df: pd.DataFrame, title, llm_indicator=True):
 
     # Copy and ensure datetime
     df = recommendations_df.copy()
@@ -25,7 +26,7 @@ def signal_shares_lineplot_quarters(recommendations_df: pd.DataFrame, llm_indica
     # Filter for years of interest
     df = df[(df["year"] >= 2000) & (df["year"] <= 2025)]
     
-    # Only keep March, June, September, December
+    # Only keep March, June, September, December (as LLM signals are only available for these months, this filters our analyst signals in other months to ensure comparability)
     df = df[df["temp_date"].dt.month.isin([3, 6, 9, 12])]
 
     # Count signals per quarter
@@ -37,10 +38,10 @@ def signal_shares_lineplot_quarters(recommendations_df: pd.DataFrame, llm_indica
     # Capitalize action names for legend, this also orders them alphabetically, enabling consistent color mapping
     signal_shares.columns = [col.capitalize() for col in signal_shares.columns]
     
-    # Professional colors (consistent with your stackplot)
+    # Professional colors 
     colors = [SIGNAL_COLORS["Buy"], SIGNAL_COLORS["Hold"], SIGNAL_COLORS["Sell"]]
 
-    # Plot yearly averages as lineplot
+    # Plot quarterly shares as lineplot
     ax = signal_shares.plot(
         figsize=(12, 6), 
         color=colors, 
@@ -50,11 +51,11 @@ def signal_shares_lineplot_quarters(recommendations_df: pd.DataFrame, llm_indica
     # Legend
     ax.legend(loc="upper right", title="Action", fontsize=12, title_fontsize=12, markerscale=1.5, borderaxespad=0.1)
 
-    # Titles and labels
-    ax.set_title("Share of LLM Signals Over Time (Yearly average)" if llm_indicator else "Share of Analyst Signals Over Time (Yearly average)",
-                 fontsize=14)
-    ax.set_ylabel("Share (%)", fontsize=12)
-    ax.set_xlabel("Year", fontsize=12)
+    # Title(s) and labels
+    ax.set_title(title,
+                 fontsize=24)
+    ax.set_ylabel("Share (%)", fontsize=18)
+    ax.set_xlabel("Year", fontsize=18)
 
     # X-axis ticks: use actual datetime values for first of each year
     years = sorted(df["temp_date"].dt.year.unique())
@@ -70,8 +71,9 @@ def signal_shares_lineplot_quarters(recommendations_df: pd.DataFrame, llm_indica
     # Grid lines
     ax.grid(axis="y", linestyle="--", alpha=0.9)
     ax.grid(axis="x", linestyle="--", alpha=0.9)
-
+    formatted_title = title.replace(" ", "_")
     plt.tight_layout()
+    plt.savefig(f"../figures/{formatted_title}.png", dpi=400, bbox_inches='tight')
     plt.show()
 
 
@@ -79,7 +81,7 @@ def signal_shares_lineplot_quarters(recommendations_df: pd.DataFrame, llm_indica
 
 
 ##### Function to plot signal shares lineplot over time (yearly mean) #####
-def signal_shares_lineplot_yearlymean(recommendations_df: pd.DataFrame, llm_indicator=True):
+def signal_shares_lineplot_yearlymean(recommendations_df: pd.DataFrame, title, llm_indicator=True):
 
     # Copy and ensure datetime
     df = recommendations_df.copy()
@@ -119,10 +121,10 @@ def signal_shares_lineplot_yearlymean(recommendations_df: pd.DataFrame, llm_indi
     ax.legend(loc="upper right", title="Action", fontsize=12, title_fontsize=12, markerscale=1.5, borderaxespad=0.1)
 
     # Titles and labels
-    ax.set_title("Share of LLM Signals Over Time (Yearly average)" if llm_indicator else "Share of Analyst Signals Over Time (Yearly average)",
-                 fontsize=14)
-    ax.set_ylabel("Share (%)", fontsize=12)
-    ax.set_xlabel("Year", fontsize=12)
+    ax.set_title(title,
+                 fontsize=24)
+    ax.set_ylabel("Share (%)", fontsize=18)
+    ax.set_xlabel("Year", fontsize=18)
 
     # Year ticks
     ax.set_xticks(signal_shares_yearly.index)
@@ -136,28 +138,27 @@ def signal_shares_lineplot_yearlymean(recommendations_df: pd.DataFrame, llm_indi
     # Grid lines
     ax.grid(axis="y", linestyle="--", alpha=0.9)
     ax.grid(axis="x", linestyle="--", alpha=0.9)
-
+    formatted_title = title.replace(" ", "_")
     plt.tight_layout()
+    plt.savefig(f"../figures/{formatted_title}.png", dpi=400, bbox_inches='tight')
     plt.show()
 
 
 
-
-
 ##### Function to plot signal shares (over time) lineplot per economic sector with yearly mean #####
-def signal_shares_lineplot_per_sector(recommendations_df: pd.DataFrame, llm_indicator=True):
+def signal_shares_lineplot_per_sector(recommendations_df: pd.DataFrame, title, llm_indicator=True):
     # Copy input df
-    df = recommendations_df.copy()
-    df["temp_date"] = pd.to_datetime(df["date"], format="%Y-%m")
-    df["year"] = df["temp_date"].dt.year
+    plot_df = recommendations_df.copy()
+    plot_df["temp_date"] = pd.to_datetime(plot_df["date"], format="%Y-%m")
+    plot_df["year"] = plot_df["temp_date"].dt.year
 
     # Filter years and quarters
-    df = df[(df["year"] >= 2000) & (df["year"] <= 2025)]
-    df = df[df["temp_date"].dt.month.isin([3, 6, 9, 12])]
+    plot_df = plot_df[(plot_df["year"] >= 2000) & (plot_df["year"] <= 2025)]
+    plot_df = plot_df[plot_df["temp_date"].dt.month.isin([3, 6, 9, 12])]
 
     # Determine unique sectors
-    sectors = df["sector"].unique()
-    n_sectors = df["sector"].nunique()
+    sectors = sorted(plot_df["sector"].dropna().unique())
+    n_sectors = plot_df["sector"].nunique()
 
     # Setup grid of subplots
     ncols = 3
@@ -169,7 +170,7 @@ def signal_shares_lineplot_per_sector(recommendations_df: pd.DataFrame, llm_indi
 
     for i, sector in enumerate(sectors):
         ax = axes[i]
-        sector_df = df[df["sector"] == sector]
+        sector_df = plot_df[plot_df["sector"] == sector]
 
         # Count signals per quarter per sector
         signal_counts = sector_df.groupby(["temp_date", "action"]).size().unstack(fill_value=0)
@@ -194,7 +195,7 @@ def signal_shares_lineplot_per_sector(recommendations_df: pd.DataFrame, llm_indi
         signal_shares_yearly.plot(ax=ax, color=colors, linewidth=2.5)
 
         # Titles & labels
-        ax.set_title(sector, fontsize=12)
+        ax.set_title(sector, fontsize=18)
         ax.set_ylim(0, 1)
         ax.yaxis.set_major_formatter(PercentFormatter(1.0))
         ax.grid(axis="y", linestyle="--", alpha=0.7)
@@ -212,124 +213,21 @@ def signal_shares_lineplot_per_sector(recommendations_df: pd.DataFrame, llm_indi
         if axes[j] in fig.axes:
             fig.delaxes(axes[j])
 
-    # Global labels
-    plt.suptitle(
-        "Share of LLM Signals Over Time by Sector (Yearly Mean)"
-        if llm_indicator
-        else "Share of Analyst Signals Over Time by Sector (Yearly Mean)",
-        fontsize=20,
-        y=0.9,
-        x = 0.5,
-    )
-   # fig.text(0.5, 0.04, "Year", ha="center", fontsize=18)
+    formatted_title = title.replace(" ", "_")
     fig.text(0.04, 0.5, "Share (%)", va="center", rotation="vertical", fontsize=18)
-
     plt.tight_layout(rect=[0.05, 0.05, 1, 0.9])
+    plt.savefig(f"../figures/{formatted_title}.png", dpi=400, bbox_inches='tight')
     plt.show()
-
-
-
-
-##### Function to plot signal shares stackplot over time (quarterly) #####
-def signal_shares_stackplot_quarters(recommendations_df: pd.DataFrame, llm_indicator=True):
-    # Copy and convert date to datetime
-    df = recommendations_df.copy()
-    df["temp_date"] = pd.to_datetime(df["date"], format="%Y-%m")
-    
-    # Filter for years of interest
-    df = df[(df["temp_date"].dt.year >= 2000) & (df["temp_date"].dt.year <= 2025)]
-    
-    # Filter for March, June, September, December
-    df = df[df["temp_date"].dt.month.isin([3, 6, 9, 12])]
-    
-    # Count signals per unique date
-    signal_counts = df.groupby(["temp_date", "action"]).size().unstack(fill_value=0)
-    
-    # Convert counts to shares
-    signal_shares = signal_counts.div(signal_counts.sum(axis=1), axis=0)
-    
-    # Custom professional colors
-    colors = [SIGNAL_COLORS["Buy"], SIGNAL_COLORS["Hold"], SIGNAL_COLORS["Sell"]]
-    
-    # Plot
-    ax = signal_shares.plot.area(figsize=(12, 6), color=colors)
-    ax.legend(loc='upper right')
-    
-    # Title and labels
-    ax.set_title("Share of LLM Signals Over Time (quarterly)" if llm_indicator else "Share of Analyst Signals Over Time (quarterly)")
-    ax.set_ylabel("Share (%)")
-    ax.set_xlabel("Year")
-    
-    # X-axis ticks: use actual datetime values for first of each year
-    years = sorted(df["temp_date"].dt.year.unique())
-    tick_dates = [signal_shares.index[signal_shares.index.year == y][0] for y in years]
-    ax.set_xticks(tick_dates)
-    ax.set_xticklabels(years, rotation=45)
-    
-    # Y-axis limits
-    ax.set_ylim(0, 1)
-    
-    plt.tight_layout()
-    plt.show()
-
-
-
-
-
-##### Function to plot signal shares stackplot over time (yearly mean) #####
-def signal_shares_stackplot_yearlymean(recommendations_df: pd.DataFrame, llm_indicator=True):
-
-    # Filter for March, June, September, December
-    df = recommendations_df.copy()
-    # Create temp date as datetime variable for filtering etc.
-    df["temp_date"] = pd.to_datetime(df["date"], format="%Y-%m")
-    # Create year only column
-    df["year"] = df["temp_date"].dt.year 
-
-    # Filter for years of interest
-    df = df[(df["year"] >= 2000) & (df["year"] <= 2025)]
-
-    # Count signals per date
-    signal_counts = df.groupby(["year", "action"]).size().unstack(fill_value=0)
-
-    # Convert counts to shares
-    signal_shares = signal_counts.div(signal_counts.sum(axis=1), axis=0)
-    
-    # Custom color palette
-    colors = [SIGNAL_COLORS["Buy"], SIGNAL_COLORS["Hold"], SIGNAL_COLORS["Sell"]]
-
-    # Actual plot
-    ax = signal_shares.plot.area(figsize=(12, 6), color=colors)
-    ax.legend(loc='upper right')
-
-    # Plot title and axis labels
-    ax.set_title("Share of LLM Signals Over Time" if llm_indicator else "Share of Analyst Signals Over Time")
-    ax.set_ylabel("Share (%)", fontsize=12)
-    ax.set_xlabel("Year", fontsize=12)
-    
-    # X-axis ticks for every year
-    ax.set_xticks(signal_shares.index)  
-    ax.set_xticklabels(signal_shares.index, rotation=45)
-
-    # Axis limits
-    ax.set_xlim(signal_shares.index.min(), signal_shares.index.max())
-    ax.set_ylim(0, 1)  # since shares are between 0 and 1
-
-    plt.xticks(rotation=45)  # rotate the automatically placed year labels
-    plt.tight_layout()
-    plt.show()
-
-
 
 
 
 ##### Function to plot signal shares per economic sector #####
-def plot_signal_shares_per_sector(recommendations_df: pd.DataFrame, llm_indicator=True):
+def plot_signal_shares_per_sector(recommendations_df: pd.DataFrame, title, llm_indicator=True):
     # Copy input df to avoid modifying original
     plot_df = recommendations_df.copy()
     
-    # Determine unique sectors
-    sectors = plot_df["sector"].unique()
+    # Determine unique sectors (sort to ensure consistent order across plots)
+    sectors = sorted(plot_df["sector"].dropna().unique())
     n_sectors = plot_df["sector"].nunique()
 
     # Set up subplots
@@ -359,7 +257,7 @@ def plot_signal_shares_per_sector(recommendations_df: pd.DataFrame, llm_indicato
         ax.bar(shares.index.str.capitalize(), shares.values, color=[SIGNAL_COLORS[s.capitalize()] for s in shares.index])
         # Add grid lines
         ax.grid(True, axis='y', linestyle='--', color='gray', alpha=0.5)
-        ax.set_title(f"Sector: {sector}", fontsize=14)
+        ax.set_title(sector, fontsize=18)
         ax.set_ylabel("Share (%)", fontsize=12)
         ax.set_ylim(0,1)
         ax.yaxis.set_major_formatter(PercentFormatter(1.0))
@@ -373,11 +271,8 @@ def plot_signal_shares_per_sector(recommendations_df: pd.DataFrame, llm_indicato
             fig.delaxes(axes[j])       
 
     plt.tight_layout()
-    plt.suptitle(
-        "Shares of LLM Recommendations by Sector" if llm_indicator else "Shares of Analyst Recommendations by Sector",
-        fontsize=16,
-        y=1.025
-    )
+    formatted_title = title.replace(" ", "_")
+    plt.savefig(f"../figures/{formatted_title}.png", dpi=400, bbox_inches='tight')
     plt.show()    
 
 
@@ -398,7 +293,7 @@ def plot_multiclass_shap(shap_values, X_data, model_classes, input_title):
     else: 
         color_map = ListedColormap(sns.color_palette(["#2E7D32", "#78909C", "#C62828"]).as_hex())
     
-    # 4. Create Figure
+    # Create Figure
     fig, ax = plt.subplots(figsize=(11, 7))
     
     # SHAP Plot
@@ -411,7 +306,7 @@ def plot_multiclass_shap(shap_values, X_data, model_classes, input_title):
         color = color_map
     )
 
-    # 6. Refined Styling
+    # Refined Styling
     # Center the title and increase padding
     plt.title(input_title, 
               fontsize=14, 
@@ -427,8 +322,6 @@ def plot_multiclass_shap(shap_values, X_data, model_classes, input_title):
                fontsize=12, labelpad=15, x = 0.2)
     plt.ylabel("Financial Metrics", fontsize=12, labelpad=15)
     plt.yticks(fontsize=10)
-
-    # 7. Final Polish and Save
     plt.tight_layout()
     
     # Save with high resolution for print
@@ -439,7 +332,7 @@ def plot_multiclass_shap(shap_values, X_data, model_classes, input_title):
 
 
 
-##### Function to plot SHAP waterfall for individual samples #####,
+##### Function to plot SHAP waterfall for individual samples #####
 def plot_waterfall(idx, 
                    shap_values_llm, shap_values_analyst,
                    input_df, 
@@ -518,4 +411,35 @@ def plot_waterfall(idx,
     plt.xlabel("Contribution to Prediction Confidence", fontsize=10, color='#555555')
     plt.tight_layout()
     plt.savefig(f"../figures/SHAP_Waterfall_llm_{prediction_llm}_analyst_{prediction_analyst}.png", dpi=400, bbox_inches='tight')
+    plt.show()
+
+
+
+
+##### Function to plot development of normalized portfolio value over time #####
+def plot_portfolio_value_over_time(return_dicts, title = None, savepath=None):
+   
+    dates = return_dicts[0]["df"]["month"].unique().to_timestamp()
+    
+    plt.figure(figsize=(12, 6)) 
+    for portfolio in return_dicts:
+        # If df is market portfolio, first filter to only include dates in the other portfolios
+        if portfolio["label"] == "Market Portfolio":
+            df = portfolio["df"].copy()
+            df_filtered = df[pd.to_datetime(df["date"]).isin(dates)]
+            df_filtered = df_filtered.groupby('date')['price'].sum().reset_index()
+            df_filtered["normalized_start_value"] = df_filtered["price"] / df_filtered["price"].iloc[0]
+            plt.plot(dates, df_filtered['normalized_start_value'], label=portfolio["label"], color=portfolio["color"], linestyle=portfolio.get("style", "-"))
+        else:
+            plt.plot(dates, portfolio["df"]['normalized_start_value'], label=portfolio["label"], color=portfolio["color"], linestyle=portfolio.get("style", "-"))
+    if title:
+        plt.title(title, fontsize = 20)
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    plt.xlabel('Year', fontsize = 18)
+    plt.ylabel('Normalized Portfolio Value', fontsize = 18)
+    plt.grid(True, alpha=0.5)
+    plt.legend(fontsize = 12, frameon = False)
+    plt.tight_layout()
+    if savepath:
+        plt.savefig(savepath, dpi=400, bbox_inches='tight')
     plt.show()

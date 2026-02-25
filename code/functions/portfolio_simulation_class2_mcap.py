@@ -2,12 +2,7 @@ import pandas as pd
 from tqdm import tqdm
 import numpy as np
 
-# Throughout this class, I generally only consider MONTHLY data. (Recommendations and stock prices)
-# LLM, as well as sell-side analyst recommendations for a given month will be processed along with the
-# monthly closing price of the respective stock. 
-# In the case of LLM recommendations, this isn't even a big issue, since the recommendations were generated
-# with financial statements published at the end of a given month.
-# In the case of sell-side analyst recommendations, this approach assumes, that the recommendation is valid for at leastthe entire month.
+# Portfolio simulation that incorporates market capitalization for buy signal allocation
 
 class PortfolioSimulation2_mcap:
 
