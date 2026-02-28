@@ -1,4 +1,5 @@
 *.txt
 *.csv
 *.jsonl
+*.pdf
 thesis_environment/
